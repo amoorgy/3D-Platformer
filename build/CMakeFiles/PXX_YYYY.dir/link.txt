@@ -1,0 +1,1 @@
+/usr/bin/c++  -Wall -Wextra -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names CMakeFiles/PXX_YYYY.dir/PXX_YYYY.cpp.o -o PXX_YYYY  -framework GLUT -framework OpenGL

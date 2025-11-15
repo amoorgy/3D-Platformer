@@ -17,7 +17,11 @@
 #include <windows.h>
 #endif
 
+#ifdef __APPLE__
+#include <GLUT/glut.h>
+#else
 #include <GL/glut.h>
+#endif
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -330,10 +334,37 @@ static void resetGame(){
     platforms[3] = {{ { 18, ph,  18}, {9, ph, 5} }, {0.9f,0.8f,0.2f}}; // yellow
 
     // Feature objects centered on each platform
-    features[0] = { { {platforms[0].box.center.x, 0.0f, platforms[0].box.center.z}, {1.6f,2.6f,1.0f} }, {0.8f,0.15f,0.15f}, ANIM_ROTATE, false, false, 0.0f };
-    features[1] = { { {platforms[1].box.center.x, 0.0f, platforms[1].box.center.z}, {1.6f,2.6f,1.6f} }, {0.7f,0.4f,0.9f}, ANIM_SCALE, false, false, 0.0f };
-    features[2] = { { {platforms[2].box.center.x, 0.0f, platforms[2].box.center.z}, {1.6f,2.0f,1.6f} }, {0.9f,0.3f,0.3f}, ANIM_TRANSLATE, false, false, 0.0f };
-    features[3] = { { {platforms[3].box.center.x, 0.0f, platforms[3].box.center.z}, {1.6f,2.2f,1.6f} }, {0.6f,0.6f,0.7f}, ANIM_COLOR, false, false, 0.0f };
+    features[0].box.center = {platforms[0].box.center.x, 0.0f, platforms[0].box.center.z};
+    features[0].box.half = {1.6f,2.6f,1.0f};
+    features[0].baseColor[0] = 0.8f; features[0].baseColor[1] = 0.15f; features[0].baseColor[2] = 0.15f;
+    features[0].type = ANIM_ROTATE;
+    features[0].allCollected = false;
+    features[0].animEnabled = false;
+    features[0].t = 0.0f;
+
+    features[1].box.center = {platforms[1].box.center.x, 0.0f, platforms[1].box.center.z};
+    features[1].box.half = {1.6f,2.6f,1.6f};
+    features[1].baseColor[0] = 0.7f; features[1].baseColor[1] = 0.4f; features[1].baseColor[2] = 0.9f;
+    features[1].type = ANIM_SCALE;
+    features[1].allCollected = false;
+    features[1].animEnabled = false;
+    features[1].t = 0.0f;
+
+    features[2].box.center = {platforms[2].box.center.x, 0.0f, platforms[2].box.center.z};
+    features[2].box.half = {1.6f,2.0f,1.6f};
+    features[2].baseColor[0] = 0.9f; features[2].baseColor[1] = 0.3f; features[2].baseColor[2] = 0.3f;
+    features[2].type = ANIM_TRANSLATE;
+    features[2].allCollected = false;
+    features[2].animEnabled = false;
+    features[2].t = 0.0f;
+
+    features[3].box.center = {platforms[3].box.center.x, 0.0f, platforms[3].box.center.z};
+    features[3].box.half = {1.6f,2.2f,1.6f};
+    features[3].baseColor[0] = 0.6f; features[3].baseColor[1] = 0.6f; features[3].baseColor[2] = 0.7f;
+    features[3].type = ANIM_COLOR;
+    features[3].allCollected = false;
+    features[3].animEnabled = false;
+    features[3].t = 0.0f;
 
     // Collectibles: 3 per platform arranged in small triangle pattern
     collectibles.clear();

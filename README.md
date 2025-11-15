@@ -46,23 +46,45 @@ Navigate the warrior character across four distinct platforms, collecting all th
 - OpenGL development libraries
 - GLUT library
 - C++11 compatible compiler
+- CMake 3.10 or higher (recommended)
 
-### macOS (using Homebrew)
+### Method 1: Using CMake (Recommended - Cross-platform)
+
+This is the preferred method as it works across all platforms (macOS, Linux, Windows).
+
 ```bash
-# Install required packages
-brew install freeglut mesa
+# On macOS, OpenGL and GLUT are already included in the system
+# No additional installation needed!
 
-# Compile
-g++ -std=c++11 -Wall -Wextra -o PXX_YYYY PXX_YYYY.cpp -framework OpenGL -framework GLUT
+# Create build directory and compile
+mkdir build
+cd build
+cmake ..
+cmake --build .
 
-# OR use the provided Makefile
+# Run the game
+./PXX_YYYY
+```
+
+Or use the provided build script:
+```bash
+./build.sh
+./build/PXX_YYYY
+```
+
+### Method 2: Using Makefile (macOS/Linux only)
+
+#### macOS
+```bash
+# macOS has OpenGL and GLUT frameworks built-in
+# Compile using the Makefile
 make
 
 # Run
 ./PXX_YYYY
 ```
 
-### Linux
+#### Linux
 Modify the Makefile's LIBS line to use Linux glut libraries:
 ```
 LIBS = -lGL -lGLU -lglut
@@ -71,6 +93,15 @@ LIBS = -lGL -lGLU -lglut
 Then compile:
 ```bash
 make
+./PXX_YYYY
+```
+
+### Method 3: Direct Compilation (macOS)
+```bash
+# Compile directly with g++
+g++ -std=c++11 -Wall -Wextra -DGL_SILENCE_DEPRECATION -o PXX_YYYY PXX_YYYY.cpp -framework OpenGL -framework GLUT
+
+# Run
 ./PXX_YYYY
 ```
 
