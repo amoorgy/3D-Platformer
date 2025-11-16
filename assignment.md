@@ -1,6 +1,3 @@
-
-
-
 German International University - Berlin
 Media Engineering and Technology
 Computer Graphics, Winter 2025
