@@ -32,8 +32,23 @@
 #include <string>
 #include <algorithm>
 
+// Optional audio: compile-time/header-availability guard for single-file submission
+#ifndef USE_MINIAUDIO
+#  if defined(__has_include)
+#    if __has_include("third_party/miniaudio.h")
+#      define USE_MINIAUDIO 1
+#    else
+#      define USE_MINIAUDIO 0
+#    endif
+#  else
+#    define USE_MINIAUDIO 0
+#  endif
+#endif
+
+#if USE_MINIAUDIO
 #define MINIAUDIO_IMPLEMENTATION
 #include "third_party/miniaudio.h"
+#endif
 
 static constexpr float PI_F = 3.14159265358979323846f;
 
@@ -86,22 +101,19 @@ static Vec3 camUp = {0.0f, 1.0f, 0.0f};
 enum CameraPreset { CAM_FOLLOW=0, CAM_TOP, CAM_SIDE, CAM_FRONT, CAM_FREE };
 static CameraPreset camMode = CAM_FOLLOW; // Fixed-angle semi top-down camera (isometric style)
 
-// Timer
+// Game state
+enum GameState { PLAYING, WON, LOST };
+static GameState gameState = PLAYING;
 static float gameTime = 120.0f; // seconds countdown
-static bool gameOver = false;
-static bool gameWin = false;
 
-// Game Over scene - flying oracles
+// Simplified flying oracle for game over
 struct FlyingOracle {
-    Vec3 pos;      // current position
-    Vec3 vel;      // velocity
-    Vec3 rotAxis;  // rotation axis
-    float rotAngle; // current rotation angle
-    float rotSpeed; // rotation speed
-    float color[3]; // oracle color
+    Vec3 pos;
+    Vec3 vel;
+    float rotation;
+    float color[3];
 };
 static FlyingOracle flyingOracles[4];
-static bool flyingOraclesInitialized = false;
 
 // Platforms
 struct Platform {
@@ -134,15 +146,11 @@ struct FeatureObj {
 };
 static FeatureObj features[4];
 
+// Simplified sky oracles
 struct SkyOracle {
-    Vec3 basePos;
-    float ringRadius;
-    float orbRadius;
+    Vec3 pos;
+    float radius;
     float rotation;
-    float rotationSpeed;
-    float bobPhase;
-    float bobSpeed;
-    float pulseSpeed;
     float color[3];
 };
 static std::vector<SkyOracle> skyOracles;
@@ -170,107 +178,82 @@ static bool specialDown[512];
 static int prevTicks = 0;
 
 // --------------------------- Audio ---------------------------
-static const char* AUDIO_BGM_PATH      = "assets/audio/bgd.wav";
-static const char* AUDIO_COLLECT_PATH  = "assets/audio/coin.wav";
-static const char* AUDIO_WIN_PATH      = "assets/audio/win.wav";
-static const char* AUDIO_LOSE_PATH     = "assets/audio/lose.wav";
+#if USE_MINIAUDIO
+static ma_engine audioEngine;
+static bool audioReady = false;
 
 struct AudioClip {
     ma_sound sound;
     bool loaded = false;
+    bool played = false; // Track if one-time sounds have played
 };
 
-static ma_engine audioEngine;
-static bool audioReady = false;
-static AudioClip audioBgm;
-static AudioClip audioCollect;
-static AudioClip audioWin;
-static AudioClip audioLose;
-static bool winSoundPlayed = false;
-static bool loseSoundPlayed = false;
+static AudioClip audioBgm, audioCollect, audioWin, audioLose;
 
-static bool fileExists(const char* path){
-    if(!path) return false;
+static bool loadAudio(AudioClip& clip, const char* path, bool loop){
     FILE* f = std::fopen(path, "rb");
-    if(f){
-        std::fclose(f);
-        return true;
-    }
-    return false;
-}
-
-static void unloadAudioClip(AudioClip& clip){
-    if(clip.loaded){
-        ma_sound_uninit(&clip.sound);
-        clip.loaded = false;
-    }
-}
-
-static bool loadAudioClip(AudioClip& clip, const char* path, ma_uint32 flags, bool loop){
-    if(!fileExists(path)){
-        std::fprintf(stderr, "[audio] Skipping %s (file not found).\n", path ? path : "<null>");
-        clip.loaded = false;
+    if(!f){
+        std::fprintf(stderr, "[audio] File not found: %s\n", path);
         return false;
     }
+    std::fclose(f);
+    
+    ma_uint32 flags = loop ? MA_SOUND_FLAG_STREAM : 0;
     if(ma_sound_init_from_file(&audioEngine, path, flags, nullptr, nullptr, &clip.sound) == MA_SUCCESS){
         clip.loaded = true;
         ma_sound_set_looping(&clip.sound, loop ? MA_TRUE : MA_FALSE);
         return true;
     }
-    std::fprintf(stderr, "[audio] Failed to load %s. Ensure the file exists.\n", path);
-    clip.loaded = false;
     return false;
 }
 
-static void playAudioClip(AudioClip& clip, bool restart){
+static void playAudio(AudioClip& clip, bool restart = true){
     if(!audioReady || !clip.loaded) return;
-    if(restart){
-        ma_sound_seek_to_pcm_frame(&clip.sound, 0);
-    }
+    if(restart) ma_sound_seek_to_pcm_frame(&clip.sound, 0);
     ma_sound_start(&clip.sound);
 }
 
+static void playOnce(AudioClip& clip){
+    if(clip.played) return;
+    playAudio(clip);
+    clip.played = true;
+}
+
 static void initAudioSystem(){
-    if(audioReady) return;
     if(ma_engine_init(nullptr, &audioEngine) != MA_SUCCESS){
-        std::fprintf(stderr, "[audio] Failed to initialize miniaudio engine. Sounds disabled.\n");
+        std::fprintf(stderr, "[audio] Failed to initialize audio engine\n");
         return;
     }
     audioReady = true;
-
-    loadAudioClip(audioBgm, AUDIO_BGM_PATH, MA_SOUND_FLAG_STREAM, true);
-    loadAudioClip(audioCollect, AUDIO_COLLECT_PATH, 0, false);
-    loadAudioClip(audioWin, AUDIO_WIN_PATH, 0, false);
-    loadAudioClip(audioLose, AUDIO_LOSE_PATH, 0, false);
-
-    if(audioBgm.loaded){
-        playAudioClip(audioBgm, true);
-    }
+    
+    loadAudio(audioBgm, "assets/audio/bgd.wav", true);
+    loadAudio(audioCollect, "assets/audio/coin.wav", false);
+    loadAudio(audioWin, "assets/audio/win.wav", false);
+    loadAudio(audioLose, "assets/audio/lose.wav", false);
+    
+    playAudio(audioBgm);
 }
 
 static void shutdownAudioSystem(){
     if(!audioReady) return;
-    unloadAudioClip(audioBgm);
-    unloadAudioClip(audioCollect);
-    unloadAudioClip(audioWin);
-    unloadAudioClip(audioLose);
+    if(audioBgm.loaded) ma_sound_uninit(&audioBgm.sound);
+    if(audioCollect.loaded) ma_sound_uninit(&audioCollect.sound);
+    if(audioWin.loaded) ma_sound_uninit(&audioWin.sound);
+    if(audioLose.loaded) ma_sound_uninit(&audioLose.sound);
     ma_engine_uninit(&audioEngine);
     audioReady = false;
 }
-
-static void playCollectSfx(){ playAudioClip(audioCollect, true); }
-
-static void playWinSfx(){
-    if(winSoundPlayed) return;
-    playAudioClip(audioWin, true);
-    winSoundPlayed = true;
-}
-
-static void playLoseSfx(){
-    if(loseSoundPlayed) return;
-    playAudioClip(audioLose, true);
-    loseSoundPlayed = true;
-}
+#else
+// No-audio stubs for single-file submission or when header is unavailable
+struct AudioClip { bool loaded=false; bool played=false; };
+static bool audioReady = false;
+static AudioClip audioBgm, audioCollect, audioWin, audioLose;
+static bool loadAudio(AudioClip&, const char*, bool){ return false; }
+static void playAudio(AudioClip&, bool=true){}
+static void playOnce(AudioClip&){}
+static void initAudioSystem(){}
+static void shutdownAudioSystem(){}
+#endif
 
 // ------------------------ Drawing primitives ------------------------
 static void setColor3f(float r,float g,float b){ glColor3f(r,g,b); }
@@ -667,14 +650,12 @@ static void resetGame(){
     camUp = {0.0f, 1.0f, 0.0f};
     camMode = CAM_FOLLOW;
     gameTime = 120.0f;
-    gameOver=false; gameWin=false;
-    flyingOraclesInitialized = false;
-    winSoundPlayed = false;
-    loseSoundPlayed = false;
-    if(audioReady && audioBgm.loaded){
-        ma_sound_seek_to_pcm_frame(&audioBgm.sound, 0);
-        ma_sound_start(&audioBgm.sound);
-    }
+    gameState = PLAYING;
+    
+    // Reset audio
+    audioWin.played = false;
+    audioLose.played = false;
+    if(audioBgm.loaded) playAudio(audioBgm);
 
     // Ground
     groundBox = {{0.0f, 0.0f, 0.0f}, {WORLD_HALF, 0.2f, WORLD_HALF}};
@@ -799,38 +780,28 @@ static void resetGame(){
     }
 
     skyOracles.clear();
-    auto addSkyOracle = [&](int pi, float offx, float offz, float heightOffset, float ringRadius, float orbRadius, float rotSpeed, float bobSpeed, float pulseSpeed){
-        const Platform& p = platforms[pi];
-        SkyOracle o;
-        o.basePos = {p.box.center.x + offx, p.box.center.y + p.box.half.y + heightOffset, p.box.center.z + offz};
-        o.ringRadius = ringRadius;
-        o.orbRadius = orbRadius;
-        o.rotation = (float)(rand()%360);
-        o.rotationSpeed = rotSpeed;
-        o.bobPhase = (float)(rand()%628)/100.0f;
-        o.bobSpeed = bobSpeed;
-        o.pulseSpeed = pulseSpeed;
-        o.color[0] = features[pi].baseColor[0];
-        o.color[1] = features[pi].baseColor[1];
-        o.color[2] = features[pi].baseColor[2];
-        skyOracles.push_back(o);
-    };
-
-    addSkyOracle(0, -3.0f, -2.0f, 5.0f, 2.2f, 0.9f, 0.6f, 1.1f, 1.6f);
-    addSkyOracle(0, 3.5f, 1.5f, 7.0f, 1.6f, 0.7f, 0.8f, 0.9f, 1.2f);
-    addSkyOracle(1, -2.5f, 2.0f, 6.0f, 2.0f, 0.8f, 0.5f, 1.3f, 1.5f);
-    addSkyOracle(1, 2.5f, -2.0f, 8.0f, 1.5f, 0.6f, 0.9f, 1.0f, 1.1f);
-    addSkyOracle(2, -2.0f, -3.5f, 6.5f, 2.1f, 0.9f, 0.7f, 1.4f, 1.8f);
-    addSkyOracle(2, 2.8f, 3.0f, 7.5f, 1.4f, 0.7f, 1.1f, 1.2f, 1.3f);
-    addSkyOracle(3, -3.0f, 2.5f, 6.0f, 2.0f, 0.85f, 0.6f, 1.0f, 1.7f);
-    addSkyOracle(3, 3.0f, -2.5f, 7.0f, 1.5f, 0.65f, 0.85f, 1.05f, 1.4f);
+    for(int i=0; i<4; i++){
+        const Platform& p = platforms[i];
+        for(int j=0; j<2; j++){
+            SkyOracle o;
+            float offx = (j==0) ? -3.0f : 3.5f;
+            float offz = (j==0) ? -2.0f : 1.5f;
+            float height = 5.0f + j * 2.0f;
+            o.pos = {p.box.center.x + offx, p.box.center.y + p.box.half.y + height, p.box.center.z + offz};
+            o.radius = 1.5f + j * 0.5f;
+            o.rotation = (float)(rand()%360);
+            o.color[0] = features[i].baseColor[0];
+            o.color[1] = features[i].baseColor[1];
+            o.color[2] = features[i].baseColor[2];
+            skyOracles.push_back(o);
+        }
+    }
 }
 
 // --------------------------- Collision ---------------------------
 static bool collidesWithWorld(const AABB&box){
     // Against walls
     for(const auto&w : walls){ if(aabbIntersects(box,w)) return true; }
-    // Feature objects (oracles) are non-solid - player can walk through them
     // Against platforms - special handling to allow walking on top
     for(const auto&p : platforms){
         // Check if player is standing on top of platform (player's bottom is above or at platform's surface)
@@ -860,6 +831,16 @@ static bool collidesWithWorld(const AABB&box){
         }
 
         if(aabbIntersects(box, o.box)) return true;
+    }
+    // Against feature objects (platform oracles) - treat as solid; allow standing on top
+    for(const auto& f : features){
+        float playerBottom = box.center.y - box.half.y;
+        float featureTop = f.box.center.y + f.box.half.y;
+        const float tolerance = 0.5f;
+        if(playerBottom >= featureTop - tolerance){
+            continue; // Player is on top of the feature
+        }
+        if(aabbIntersects(box, f.box)) return true;
     }
     return false;
 }
@@ -904,7 +885,6 @@ static void updateCollectibles(){
     AABB pb = { playerPos, playerHalf };
     int completedCount=0;
     bool collectedSomething=false;
-    bool wasWinning = gameWin;
     for(auto &c : collectibles){
         if(!c.collected && aabbIntersects(pb, c.box)){
             c.collected = true;
@@ -920,12 +900,12 @@ static void updateCollectibles(){
         }
         if(collectedPerPlatform[i] >= totalCollectiblesPerPlatform) completedCount++;
     }
-    if(collectedSomething) playCollectSfx();
-    if(completedCount==4 && !wasWinning){
-        gameWin = true;
-        playWinSfx();
-    } else if(completedCount==4){
-        gameWin = true;
+    if(collectedSomething) playAudio(audioCollect);
+    if(completedCount==4){
+        if(gameState == PLAYING){
+            gameState = WON;
+            playOnce(audioWin);
+        }
     }
 }
 
@@ -937,36 +917,19 @@ static void updateFeatures(float dt){
 
 static void updateSkyOracles(float dt){
     for(auto& o : skyOracles){
-        o.rotation = fmodf(o.rotation + o.rotationSpeed * dt * 60.0f, 360.0f);
-        o.bobPhase += dt * o.bobSpeed;
+        o.rotation = fmodf(o.rotation + 30.0f * dt, 360.0f);
     }
 }
 
 // --------------------------- Game Over Scene ---------------------------
 static void initFlyingOracles(){
-    // Initialize oracles with random positions, velocities, and rotations
     for(int i=0; i<4; i++){
-        // Start from feature positions
         flyingOracles[i].pos = features[i].box.center;
-
-        // Random velocity in all directions (tumbling through space)
-        float vx = (rand()%200 - 100) / 20.0f; // -5 to 5
-        float vy = (rand()%100 + 50) / 20.0f;  // 2.5 to 7.5 (upward bias)
-        float vz = (rand()%200 - 100) / 20.0f; // -5 to 5
+        float vx = (rand()%200 - 100) / 20.0f;
+        float vy = (rand()%100 + 50) / 20.0f;
+        float vz = (rand()%200 - 100) / 20.0f;
         flyingOracles[i].vel = {vx, vy, vz};
-
-        // Random rotation axis
-        float rx = (rand()%200 - 100) / 100.0f; // -1 to 1
-        float ry = (rand()%200 - 100) / 100.0f;
-        float rz = (rand()%200 - 100) / 100.0f;
-        float rlen = std::sqrt(rx*rx + ry*ry + rz*rz);
-        if(rlen < 0.01f) rlen = 1.0f;
-        flyingOracles[i].rotAxis = {rx/rlen, ry/rlen, rz/rlen};
-
-        flyingOracles[i].rotAngle = 0.0f;
-        flyingOracles[i].rotSpeed = (rand()%100 + 50) / 10.0f; // 5 to 15 deg/s
-
-        // Copy oracle colors
+        flyingOracles[i].rotation = 0.0f;
         flyingOracles[i].color[0] = features[i].baseColor[0];
         flyingOracles[i].color[1] = features[i].baseColor[1];
         flyingOracles[i].color[2] = features[i].baseColor[2];
@@ -976,23 +939,18 @@ static void initFlyingOracles(){
 static void updateFlyingOracles(float dt){
     const float gravity = -9.8f;
     for(int i=0; i<4; i++){
-        // Update position with velocity
         flyingOracles[i].pos.x += flyingOracles[i].vel.x * dt;
         flyingOracles[i].pos.y += flyingOracles[i].vel.y * dt;
         flyingOracles[i].pos.z += flyingOracles[i].vel.z * dt;
-
-        // Apply gravity to velocity
         flyingOracles[i].vel.y += gravity * dt;
-
-        // Bounce off invisible floor at y=0
+        
         if(flyingOracles[i].pos.y < 0.0f){
             flyingOracles[i].pos.y = 0.0f;
-            flyingOracles[i].vel.y = -flyingOracles[i].vel.y * 0.7f; // bounce with damping
+            flyingOracles[i].vel.y = -flyingOracles[i].vel.y * 0.7f;
         }
-
-        // Update rotation
-        flyingOracles[i].rotAngle += flyingOracles[i].rotSpeed * dt * 60.0f; // deg
-        if(flyingOracles[i].rotAngle > 360.0f) flyingOracles[i].rotAngle -= 360.0f;
+        
+        flyingOracles[i].rotation += 180.0f * dt;
+        if(flyingOracles[i].rotation > 360.0f) flyingOracles[i].rotation -= 360.0f;
     }
 }
 
@@ -1153,13 +1111,16 @@ static void drawFeatures(){
 }
 
 static void drawSkyOracles(){
+    static float time = 0.0f;
+    time += 0.016f; // Approximate frame time
+    
     for(const auto& o : skyOracles){
-        float bob = sinf(o.bobPhase) * 0.6f;
-        Vec3 center = {o.basePos.x, o.basePos.y + bob, o.basePos.z};
-        float pulse = 0.5f + 0.5f*sinf(o.bobPhase * o.pulseSpeed);
-        float haloCol[3]={o.color[0], o.color[1], o.color[2]};
-        drawGlowingOrb(center, o.orbRadius * (0.8f + 0.2f*pulse), haloCol, 0.6f + 0.4f*pulse);
-        drawHaloRing({center.x, center.y - 0.2f, center.z}, o.ringRadius * 0.4f, o.ringRadius, haloCol, 0.3f + 0.4f*pulse);
+        float bob = sinf(time + o.rotation * 0.01f) * 0.6f;
+        Vec3 center = {o.pos.x, o.pos.y + bob, o.pos.z};
+        float pulse = 0.5f + 0.5f*sinf(time * 2.0f);
+        
+        drawGlowingOrb(center, o.radius * 0.5f * (0.8f + 0.2f*pulse), o.color, 0.6f + 0.4f*pulse);
+        drawHaloRing({center.x, center.y - 0.2f, center.z}, o.radius * 0.4f, o.radius, o.color, 0.3f + 0.4f*pulse);
 
         glPushMatrix();
         glTranslatef(center.x, center.y, center.z);
@@ -1168,7 +1129,7 @@ static void drawSkyOracles(){
         glBegin(GL_LINE_LOOP);
         for(int i=0;i<48;i++){
             float ang = (float)i/48.0f * 2.0f * PI_F;
-            glVertex3f(cosf(ang) * o.ringRadius * 0.85f, 0.0f, sinf(ang) * o.ringRadius * 0.85f);
+            glVertex3f(cosf(ang) * o.radius * 0.85f, 0.0f, sinf(ang) * o.radius * 0.85f);
         }
         glEnd();
         glPopMatrix();
@@ -1202,9 +1163,16 @@ static void drawHUD(){
         collectedPerPlatform[3], totalCollectiblesPerPlatform);
     drawText(10, winH-40, buf);
 
-    if(gameWin){ glColor3f(0.2f,1.0f,0.3f); drawText(winW/2-60, winH-60, "GAME WIN!"); }
+    if(gameState == WON){ 
+        glColor3f(0.2f,1.0f,0.3f); 
+        drawText(winW/2-60, winH-60, "GAME WIN!"); 
+    }
 
-    if(gameOver){ glColor3f(1.0f,0.2f,0.2f); drawText(winW/2-70, winH/2, "GAME OVER"); drawText(winW/2-90, winH/2-20, "Press ESC to Restart"); }
+    if(gameState == LOST){ 
+        glColor3f(1.0f,0.2f,0.2f); 
+        drawText(winW/2-70, winH/2, "GAME OVER"); 
+        drawText(winW/2-90, winH/2-20, "Press ESC to Restart"); 
+    }
 
     glMatrixMode(GL_MODELVIEW); glPopMatrix();
     glMatrixMode(GL_PROJECTION); glPopMatrix();
@@ -1233,11 +1201,8 @@ static void drawGameOverScene(){
         // Position oracle
         glTranslatef(flyingOracles[i].pos.x, flyingOracles[i].pos.y, flyingOracles[i].pos.z);
 
-        // Apply rotation
-        glRotatef(flyingOracles[i].rotAngle,
-                  flyingOracles[i].rotAxis.x,
-                  flyingOracles[i].rotAxis.y,
-                  flyingOracles[i].rotAxis.z);
+        // Apply simple Y-axis rotation
+        glRotatef(flyingOracles[i].rotation, 0, 1, 0);
 
         float r = flyingOracles[i].color[0];
         float g = flyingOracles[i].color[1];
@@ -1314,14 +1279,14 @@ static void setCamera(){
         up = {0, 1, 0};
     }
     else if(camMode==CAM_TOP){ eye = {0.0f, 80.0f, 0.01f}; target = {0,0,0}; up={0,0,-1}; }
-    else if(camMode==CAM_SIDE){ eye = {80.0f, 15.0f, 0.01f}; target = {0,0,0}; up={0,1,0}; }
+    else if(camMode==CAM_SIDE){ eye = {55.0f, 15.0f, 0.01f}; target = {0,0,0}; up={0,1,0}; } // Moved from 100 to 55 to be between play area and temples
     else if(camMode==CAM_FRONT){ eye = {0.01f, 15.0f, 80.0f}; target = {0,0,0}; up={0,1,0}; }
 
     gluLookAt(eye.x,eye.y,eye.z, target.x,target.y,target.z, up.x,up.y,up.z);
 }
 
 static void display(){
-    if(gameOver){
+    if(gameState == LOST){
         // Replace entire scene with Game Over scene showing flying oracles
         drawGameOverScene();
         glutSwapBuffers();
@@ -1370,7 +1335,7 @@ static void updateCameraFreeMove(float dt){
 }
 
 static void updatePlayerMovement(float dt){
-    if(gameOver) return; // no control on game over
+    if(gameState == LOST) return; // no control on game over
 
     // Horizontal movement
     Vec3 move = {0,0,0};
@@ -1427,19 +1392,17 @@ static void idle(){
     float dt = (t - prevTicks) / 1000.0f;
     prevTicks = t;
 
-    if(!gameOver && !gameWin){
+    if(gameState == PLAYING){
         gameTime -= dt;
         if(gameTime<=0.0f){
             gameTime=0.0f;
-            gameOver=true;
-            playLoseSfx();
-            // Initialize flying oracles for Game Over scene
+            gameState = LOST;
+            playOnce(audioLose);
             initFlyingOracles();
-            flyingOraclesInitialized = true;
         }
     }
 
-    if(gameOver && flyingOraclesInitialized){
+    if(gameState == LOST){
         // Update flying oracles animation
         updateFlyingOracles(dt);
     } else {
@@ -1472,8 +1435,8 @@ static void keyboard(unsigned char key, int x, int y){
     }
     if(key==27) resetGame(); // ESC key to reset game
 
-    // Jump with spacebar
-    if((key==' ') && playerOnGround && !gameOver){
+    // Jump with spacebar (allowed during PLAYING and after win)
+    if((key==' ') && playerOnGround && (gameState == PLAYING || gameState == WON)){
         playerVelY = JUMP_VELOCITY;
         playerOnGround = false;
     }
