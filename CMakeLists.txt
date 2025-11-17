@@ -15,18 +15,28 @@ endif()
 
 # Find OpenGL
 find_package(OpenGL REQUIRED)
+find_package(Threads REQUIRED)
 
 # Platform-specific setup
 if(APPLE)
     # macOS: Use frameworks
     find_library(GLUT_LIBRARY GLUT)
     find_library(OpenGL_LIBRARY OpenGL)
+    find_library(AudioToolbox_LIBRARY AudioToolbox)
+    find_library(AudioUnit_LIBRARY AudioUnit)
+    find_library(CoreAudio_LIBRARY CoreAudio)
 
     if(NOT GLUT_LIBRARY)
         message(FATAL_ERROR "GLUT framework not found. Please install freeglut via Homebrew: brew install freeglut")
     endif()
 
-    set(PLATFORM_LIBS ${GLUT_LIBRARY} ${OpenGL_LIBRARY})
+    set(PLATFORM_LIBS
+        ${GLUT_LIBRARY}
+        ${OpenGL_LIBRARY}
+        ${AudioToolbox_LIBRARY}
+        ${AudioUnit_LIBRARY}
+        ${CoreAudio_LIBRARY}
+    )
 
     # Add include directories for macOS
     include_directories(/System/Library/Frameworks)
@@ -35,6 +45,9 @@ elseif(UNIX)
     # Linux: Use libraries
     find_package(GLUT REQUIRED)
     set(PLATFORM_LIBS ${OPENGL_LIBRARIES} ${GLUT_LIBRARIES} GLU)
+    if(CMAKE_DL_LIBS)
+        list(APPEND PLATFORM_LIBS ${CMAKE_DL_LIBS})
+    endif()
     include_directories(${OPENGL_INCLUDE_DIRS} ${GLUT_INCLUDE_DIRS})
 
 elseif(WIN32)
@@ -48,7 +61,7 @@ endif()
 add_executable(PXX_YYYY PXX_YYYY.cpp)
 
 # Link libraries
-target_link_libraries(PXX_YYYY ${PLATFORM_LIBS})
+target_link_libraries(PXX_YYYY PRIVATE ${PLATFORM_LIBS} Threads::Threads)
 
 # Print configuration info
 message(STATUS "Build configuration:")

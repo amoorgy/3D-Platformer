@@ -13,17 +13,17 @@
 // Notes:
 //  - Everything is built from OpenGL primitives (quads/triangles). No imported models.
 //  - Uses GLUT for windowing/input and GLU for camera.
-//  - Keep code readable and straightforward at a bachelor level, but complete.
 
 #ifdef _WIN32
 #include <windows.h>
 #endif
-
 #ifdef __APPLE__
 #include <GLUT/glut.h>
 #else
 #include <GL/glut.h>
 #endif
+// GLU for camera
+
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -32,6 +32,9 @@
 #include <string>
 #include <algorithm>
 
+#define MINIAUDIO_IMPLEMENTATION
+#include "third_party/miniaudio.h"
+
 static constexpr float PI_F = 3.14159265358979323846f;
 
 // --------------------------- Math helpers ---------------------------
@@ -39,29 +42,30 @@ struct Vec3 { float x, y, z; };
 static inline Vec3 makeVec3(float x, float y, float z){ return {x,y,z}; }
 static inline Vec3 add(const Vec3&a,const Vec3&b){ return {a.x+b.x,a.y+b.y,a.z+b.z}; }
 static inline Vec3 sub(const Vec3&a,const Vec3&b){ return {a.x-b.x,a.y-b.y,a.z-b.z}; }
-static inline Vec3 mul(const Vec3&a,float s){ return {a.x*s,a.y*s,a.z*s}; }
+static inline Vec3 mul(const Vec3&a,float s){ return {a.x*s,a.y*s,a.z*s}; } 
+// to simplify vector operations
 
 struct AABB {
     Vec3 center; // world position
     Vec3 half;   // half sizes
-};
+}; // for the object boundin so we can calculate from (center - half) to (center + half)
 
 static inline bool aabbIntersects(const AABB&a, const AABB&b){
     return std::abs(a.center.x - b.center.x) <= (a.half.x + b.half.x) &&
            std::abs(a.center.y - b.center.y) <= (a.half.y + b.half.y) &&
            std::abs(a.center.z - b.center.z) <= (a.half.z + b.half.z);
-}
+} // to check if two boxes intersect
 
-// Distance squared in XZ plane
+
 static inline float dist2XZ(const Vec3&a, const Vec3&b){
     float dx=a.x-b.x, dz=a.z-b.z; return dx*dx+dz*dz;
-}
+} //. calculates the distance for in xy plane ignoring height y
 
 // --------------------------- Global state ---------------------------
-static int winW=1200, winH=800;
+static int winW=1200, winH=800; // this is for window dimensions and size
 
 // World scale and layout
-static const float WORLD_HALF = 40.0f; // square world [-40,40] in XZ
+static const float WORLD_HALF = 40.0f; // this is the playable area which is a 80x80 unit sqyare at origin
 
 // Player state
 static Vec3 playerPos = {0.0f, 1.0f, 0.0f}; // y=1 to sit above ground (thickness)
@@ -164,6 +168,109 @@ static bool specialDown[512];
 
 // Time step
 static int prevTicks = 0;
+
+// --------------------------- Audio ---------------------------
+static const char* AUDIO_BGM_PATH      = "assets/audio/bgd.wav";
+static const char* AUDIO_COLLECT_PATH  = "assets/audio/coin.wav";
+static const char* AUDIO_WIN_PATH      = "assets/audio/win.wav";
+static const char* AUDIO_LOSE_PATH     = "assets/audio/lose.wav";
+
+struct AudioClip {
+    ma_sound sound;
+    bool loaded = false;
+};
+
+static ma_engine audioEngine;
+static bool audioReady = false;
+static AudioClip audioBgm;
+static AudioClip audioCollect;
+static AudioClip audioWin;
+static AudioClip audioLose;
+static bool winSoundPlayed = false;
+static bool loseSoundPlayed = false;
+
+static bool fileExists(const char* path){
+    if(!path) return false;
+    FILE* f = std::fopen(path, "rb");
+    if(f){
+        std::fclose(f);
+        return true;
+    }
+    return false;
+}
+
+static void unloadAudioClip(AudioClip& clip){
+    if(clip.loaded){
+        ma_sound_uninit(&clip.sound);
+        clip.loaded = false;
+    }
+}
+
+static bool loadAudioClip(AudioClip& clip, const char* path, ma_uint32 flags, bool loop){
+    if(!fileExists(path)){
+        std::fprintf(stderr, "[audio] Skipping %s (file not found).\n", path ? path : "<null>");
+        clip.loaded = false;
+        return false;
+    }
+    if(ma_sound_init_from_file(&audioEngine, path, flags, nullptr, nullptr, &clip.sound) == MA_SUCCESS){
+        clip.loaded = true;
+        ma_sound_set_looping(&clip.sound, loop ? MA_TRUE : MA_FALSE);
+        return true;
+    }
+    std::fprintf(stderr, "[audio] Failed to load %s. Ensure the file exists.\n", path);
+    clip.loaded = false;
+    return false;
+}
+
+static void playAudioClip(AudioClip& clip, bool restart){
+    if(!audioReady || !clip.loaded) return;
+    if(restart){
+        ma_sound_seek_to_pcm_frame(&clip.sound, 0);
+    }
+    ma_sound_start(&clip.sound);
+}
+
+static void initAudioSystem(){
+    if(audioReady) return;
+    if(ma_engine_init(nullptr, &audioEngine) != MA_SUCCESS){
+        std::fprintf(stderr, "[audio] Failed to initialize miniaudio engine. Sounds disabled.\n");
+        return;
+    }
+    audioReady = true;
+
+    loadAudioClip(audioBgm, AUDIO_BGM_PATH, MA_SOUND_FLAG_STREAM, true);
+    loadAudioClip(audioCollect, AUDIO_COLLECT_PATH, 0, false);
+    loadAudioClip(audioWin, AUDIO_WIN_PATH, 0, false);
+    loadAudioClip(audioLose, AUDIO_LOSE_PATH, 0, false);
+
+    if(audioBgm.loaded){
+        playAudioClip(audioBgm, true);
+    }
+}
+
+static void shutdownAudioSystem(){
+    if(!audioReady) return;
+    unloadAudioClip(audioBgm);
+    unloadAudioClip(audioCollect);
+    unloadAudioClip(audioWin);
+    unloadAudioClip(audioLose);
+    ma_engine_uninit(&audioEngine);
+    audioReady = false;
+}
+
+static void playCollectSfx(){ playAudioClip(audioCollect, true); }
+
+static void playWinSfx(){
+    if(winSoundPlayed) return;
+    playAudioClip(audioWin, true);
+    winSoundPlayed = true;
+}
+
+static void playLoseSfx(){
+    if(loseSoundPlayed) return;
+    playAudioClip(audioLose, true);
+    loseSoundPlayed = true;
+}
 
 // ------------------------ Drawing primitives ------------------------
 static void setColor3f(float r,float g,float b){ glColor3f(r,g,b); }
@@ -562,6 +669,12 @@ static void resetGame(){
     gameTime = 120.0f;
     gameOver=false; gameWin=false;
     flyingOraclesInitialized = false;
+    winSoundPlayed = false;
+    loseSoundPlayed = false;
+    if(audioReady && audioBgm.loaded){
+        ma_sound_seek_to_pcm_frame(&audioBgm.sound, 0);
+        ma_sound_start(&audioBgm.sound);
+    }
 
     // Ground
     groundBox = {{0.0f, 0.0f, 0.0f}, {WORLD_HALF, 0.2f, WORLD_HALF}};
@@ -790,10 +903,13 @@ static bool isPlayerOnSurface(){
 static void updateCollectibles(){
     AABB pb = { playerPos, playerHalf };
     int completedCount=0;
+    bool collectedSomething=false;
+    bool wasWinning = gameWin;
     for(auto &c : collectibles){
         if(!c.collected && aabbIntersects(pb, c.box)){
             c.collected = true;
             collectedPerPlatform[c.platformIndex]++;
+            collectedSomething = true;
         }
     }
     // Check platform completions, auto-start animations
@@ -804,7 +920,13 @@ static void updateCollectibles(){
         }
         if(collectedPerPlatform[i] >= totalCollectiblesPerPlatform) completedCount++;
     }
-    if(completedCount==4) gameWin = true;
+    if(collectedSomething) playCollectSfx();
+    if(completedCount==4 && !wasWinning){
+        gameWin = true;
+        playWinSfx();
+    } else if(completedCount==4){
+        gameWin = true;
+    }
 }
 
 static void updateFeatures(float dt){
@@ -1310,6 +1432,7 @@ static void idle(){
         if(gameTime<=0.0f){
             gameTime=0.0f;
             gameOver=true;
+            playLoseSfx();
             // Initialize flying oracles for Game Over scene
             initFlyingOracles();
             flyingOraclesInitialized = true;
@@ -1386,6 +1509,8 @@ int main(int argc, char** argv){
 
     initGL();
     resetGame();
+    initAudioSystem();
+    atexit(shutdownAudioSystem);
 
     glutDisplayFunc(display);
     glutIdleFunc(idle);

@@ -7,10 +7,10 @@ CXXFLAGS = -std=c++11 -Wall -Wextra
 
 # Libraries (Linux/macos)
 # macOS usually uses frameworks
-LIBS = -framework OpenGL -framework GLUT
+LIBS = -framework OpenGL -framework GLUT -framework AudioToolbox -framework AudioUnit -framework CoreAudio -lpthread
 
 # If on Linux, you might need:
-# LIBS = -lGL -lGLU -lgl
+# LIBS = -lGL -lGLU -lglut -lpthread -ldl
 
 # Target executable
 TARGET = PXX_YYYY
